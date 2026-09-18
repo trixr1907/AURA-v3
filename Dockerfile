@@ -34,6 +34,7 @@ COPY --chown=aura:aura VERSION .
 COPY --chown=aura:aura aura/ /app/aura/
 COPY --chown=aura:aura data/ /app/data/
 COPY --chown=aura:aura aura_ux_preview.html /app/aura_ux_preview.html
+COPY --chown=aura:aura dashboard.html /app/dashboard.html
 
 # Wechsle zum unprivilegierten Benutzer
 USER aura

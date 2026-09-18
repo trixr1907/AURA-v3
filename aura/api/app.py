@@ -471,7 +471,7 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def serve_dashboard():
         """Liefert das vollumfängliche AURA Confluence Terminal aus."""
-        dash_path = Path(__file__).parent.parent.parent / "aura_ux_preview.html"
+        dash_path = Path(__file__).parent.parent.parent / "dashboard.html"
         if dash_path.exists():
             return HTMLResponse(content=dash_path.read_text(encoding="utf-8"))
         return HTMLResponse(content="<h1>AURA v3 Running</h1>")
@@ -479,7 +479,7 @@ def create_app(
     @app.get("/preview", response_class=HTMLResponse)
     def serve_preview():
         """Liefert das moderne, responsive Terminal v3 aus."""
-        dash_path = Path(__file__).parent.parent.parent / "aura_ux_preview.html"
+        dash_path = Path(__file__).parent.parent.parent / "dashboard.html"
         if dash_path.exists():
             return HTMLResponse(content=dash_path.read_text(encoding="utf-8"))
         return HTMLResponse(content="<h1>aura_ux_preview.html nicht gefunden</h1>", status_code=404)
