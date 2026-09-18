@@ -33,7 +33,6 @@ RUN pip install --no-cache-dir -r requirements.lock
 COPY --chown=aura:aura VERSION .
 COPY --chown=aura:aura aura/ /app/aura/
 COPY --chown=aura:aura data/ /app/data/
-COPY --chown=aura:aura scripts/ /app/scripts/
 COPY --chown=aura:aura aura_ux_preview.html /app/aura_ux_preview.html
 
 # Wechsle zum unprivilegierten Benutzer
