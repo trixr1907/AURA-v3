@@ -374,3 +374,102 @@ class TestRoiBaseEquity:
         data = resp.json()
         assert data["total_closed_trades"] == 0
         assert data["roi_pct"] == 0.0, f"ROI sollte 0.0 sein ohne Trades, ist {data['roi_pct']}"
+
+
+# ---------------------------------------------------------------------------
+# Multitenancy-Sicherheit: Session-Cookie muss das Konto binden, nicht der
+# vom Client frei waehlbare Query-/Body-Parameter (Audit-Fund nach cf057d4).
+# ---------------------------------------------------------------------------
+class TestSessionAccountBinding:
+    MASTER_TOKEN = "session_binding_master_tok"
+    BUDDY_TOKEN = "session_binding_buddy_tok"
+
+    @pytest.fixture
+    def multi_token_client(self, tmp_path: Path, monkeypatch) -> TestClient:
+        monkeypatch.setenv(
+            "AURA_RELAY_TOKEN", f"{self.MASTER_TOKEN},{self.BUDDY_TOKEN}"
+        )
+        from aura.api.auth import _FAILED_LOGINS, _ACTIVE_SESSIONS
+        _FAILED_LOGINS.clear()
+        _ACTIVE_SESSIONS.clear()
+        db_file = tmp_path / "session_binding_test.db"
+        conn = connect(db_file)
+        sm = RunnerStateMachine(SystemState.RUNNING)
+        pe = PaperTradingEngine(conn=conn)
+        app = create_app(conn=conn, state_machine=sm, paper_engine=pe)
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_login_binds_session_to_account_from_token(self, multi_token_client: TestClient):
+        """Ein 'buddy'-Token muss die Session serverseitig an account='buddy' binden."""
+        resp = multi_token_client.post(
+            "/api/v3/auth/login", json={"token": self.BUDDY_TOKEN}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["account"] == "buddy"
+
+        status_resp = multi_token_client.get(
+            "/api/v3/auth/status", cookies=resp.cookies
+        )
+        assert status_resp.json()["account"] == "buddy"
+
+    def test_buddy_session_cannot_read_master_state_via_query_param(
+        self, multi_token_client: TestClient
+    ):
+        """Eine Buddy-Session darf trotz ?account=master NICHT das Master-Konto sehen.
+
+        Dies ist die eigentliche Luecke aus cf057d4: /state nahm den Account
+        ungeprueft aus dem Query-Parameter an, unabhaengig vom eingeloggten Token.
+        """
+        login_resp = multi_token_client.post(
+            "/api/v3/auth/login", json={"token": self.BUDDY_TOKEN}
+        )
+        assert login_resp.status_code == 200
+
+        # Versuch, per Query-Param das Master-Konto abzufragen, obwohl mit dem
+        # Buddy-Token eingeloggt wurde.
+        resp = multi_token_client.get(
+            "/api/v3/state?account=master", cookies=login_resp.cookies
+        )
+        assert resp.status_code == 200
+        assert resp.json()["config"] is not None  # sanity: Response ist ein echter State
+
+        # Cross-check ueber den internen Session-Store: die Session MUSS an
+        # 'buddy' gebunden bleiben, unabhaengig vom Query-Param.
+        from aura.api.auth import get_session_data
+        session_cookie = login_resp.cookies.get("aura_session")
+        sdata = get_session_data(session_cookie)
+        assert sdata is not None
+        assert sdata["account_id"] == "buddy", (
+            "Session-Account wurde durch ?account=master client-seitig ueberschrieben!"
+        )
+
+    def test_buddy_session_cannot_reset_master_account_via_body_param(
+        self, multi_token_client: TestClient
+    ):
+        """Eine Buddy-Session darf mit {"account": "master"} im Body nicht das
+        Master-Konto zuruecksetzen -- die Session bindet das Zielkonto serverseitig.
+        """
+        login_resp = multi_token_client.post(
+            "/api/v3/auth/login", json={"token": self.BUDDY_TOKEN}
+        )
+        resp = multi_token_client.post(
+            "/api/v3/account/reset",
+            json={"account": "master"},
+            cookies=login_resp.cookies,
+        )
+        assert resp.status_code == 200
+        assert "'buddy'" in resp.json()["message"], (
+            f"Reset-Endpoint hat trotz Buddy-Session das Body-Feld 'master' verwendet: {resp.json()}"
+        )
+
+    def test_master_token_without_cookie_can_still_use_query_param(
+        self, multi_token_client: TestClient
+    ):
+        """Reine Token-Auth ohne Session-Cookie (z.B. Skript/CLI) darf weiterhin
+        den Query-Parameter nutzen -- die Bindung gilt nur fuer Cookie-Sessions.
+        """
+        resp = multi_token_client.get(
+            "/api/v3/state?account=buddy",
+            headers={"X-AURA-TOKEN": self.MASTER_TOKEN},
+        )
+        assert resp.status_code == 200

@@ -28,6 +28,8 @@ class AuthStatusResponse(BaseModel):
     ok: bool = True
     authenticated: bool
     role: str = "anonymous"
+    account: str | None = None
+    user_name: str | None = None
 
 
 class BotConfigUpdate(BaseModel):

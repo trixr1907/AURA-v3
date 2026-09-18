@@ -431,12 +431,9 @@ button.act{height:34px;border:0;border-radius:8px;background:#e2e8f0;color:#0911
         </div>
       </div>
       <div>
-        <div class="lbl">Konto-Auswahl</div>
-        <div style="display:inline-flex;align-items:center;background:rgba(15,23,42,.9);border:1px solid #38bdf8;padding:0 6px;border-radius:6px;height:28px">
-          <select id="sel-account-tenant" onchange="window.AuraApp && window.AuraApp.switchAccount(this.value);" style="background:transparent;border:none;color:#38bdf8;font-size:11px;font-weight:700;cursor:pointer;outline:none">
-            <option value="master" style="background:#0f172a;color:#38bdf8">👤 Ivo (Master)</option>
-            <option value="buddy" style="background:#0f172a;color:#38bdf8">👤 Kumpel (Buddy)</option>
-          </select>
+        <div class="lbl">Konto</div>
+        <div style="display:inline-flex;align-items:center;background:rgba(15,23,42,.9);border:1px solid #38bdf8;padding:0 8px;border-radius:6px;height:28px">
+          <span id="current-user-display" style="color:#38bdf8;font-size:11px;font-weight:700">👤 Ivo (Master)</span>
         </div>
       </div>
       <div>
@@ -587,7 +584,7 @@ button.act{height:34px;border:0;border-radius:8px;background:#e2e8f0;color:#0911
       <div class="panel-head">
         <h2>⚡ Server Autobot (Docker · Viewer + Config)</h2>
         <span class="autobot-status-badge" id="ab-status-badge">● SERVER LIVE</span>
-        <button class="ab-toggle-btn" id="btn-toggle-autobot" type="button">▶ Server-Bot Config aktivieren</button>
+        <button class="ab-toggle-btn" id="btn-toggle-autobot" type="button">▶ Trading starten</button>
         <button class="tc-btn" id="btn-config-autobot" type="button" style="margin-left:4px;padding:4px 9px;font-size:9.5px;color:#c084fc;border-color:rgba(168,85,247,.4)" title="Server-Bot-Parameter und Strategie konfigurieren">⚙ Parameter</button>
         <button class="tc-btn" id="btn-reset-autobot" type="button" style="margin-left:4px;padding:4px 8px;font-size:9.5px;color:var(--dim)" title="Lokales Browser-Archiv löschen; Server-Trades bleiben erhalten">↺ Archiv</button>
       </div>
@@ -9580,10 +9577,10 @@ const _auraRoot = typeof window !== 'undefined' ? window : (typeof globalThis !=
 _auraRoot.AuraApp = {
   isAuthenticated: false,
   currentAccount: 'master',
-  switchAccount(acc) {
+  switchAccount(acc, userName) {
     this.currentAccount = acc;
-    const sel = document.getElementById('sel-account-tenant');
-    if (sel) sel.value = acc;
+    const uDisp = document.getElementById('current-user-display');
+    if (uDisp) uDisp.textContent = '👤 ' + (userName || (acc === 'buddy' ? 'Kumpel (Buddy)' : 'Ivo (Master)'));
     if (typeof SyncEngine !== 'undefined' && SyncEngine.pull) {
       SyncEngine.pull();
     }
@@ -9632,11 +9629,15 @@ _auraRoot.AuraApp = {
       });
       if (resp.ok) {
         this.isAuthenticated = true;
-        if (token.includes('buddy')) {
-          this.switchAccount('buddy');
-        } else {
-          this.switchAccount('master');
-        }
+        let acc = 'master', uname = 'Ivo (Master)';
+        try {
+          const body = await resp.json();
+          if (body && body.data) {
+            acc = body.data.account || acc;
+            uname = body.data.user_name || uname;
+          }
+        } catch (_) {}
+        this.switchAccount(acc, uname);
         this.dismissLogin();
         const authPill = $('auth-status-pill');
         if (authPill) {
@@ -9702,6 +9703,9 @@ _auraRoot.AuraApp = {
         const data = await resp.json();
         if (data.authenticated) {
           this.isAuthenticated = true;
+          if (data.account) {
+            this.switchAccount(data.account, data.user_name);
+          }
           if (typeof document !== 'undefined') {
             const authPill = $('auth-status-pill');
             if (authPill) {
@@ -10673,7 +10677,7 @@ const Autobot = {
           }
           const data = await resp.json().catch(() => ({}));
           if (data.ok) {
-            this.log(`📢 ${isHalted ? 'Wiederaufnahme' : 'Not-Halt'} angefordert: ${data.message || ''}`);
+            this.log(`📢 ${isHalted ? 'Trading-Start' : 'Trading-Pause'} angefordert: ${data.message || ''}`);
             if (typeof SyncEngine !== 'undefined') await SyncEngine.pull();
           } else {
             alert('Fehler beim Senden des Befehls: ' + (data.detail || data.message || 'Unbekannt'));
@@ -11254,22 +11258,22 @@ const Autobot = {
     const btn = $('btn-toggle-autobot');
     if (badge) {
       if (this.worker && this.worker.is_halted) {
-        badge.textContent = '⏹ NOT-HALT (Einstiege gesperrt)';
+        badge.textContent = '⏸ PAUSIERT (Keine neuen Trades)';
         badge.className = 'autobot-status-badge';
         badge.style.background = 'rgba(239,68,68,.2)';
         badge.style.borderColor = '#ef4444';
         badge.style.color = '#ef4444';
         if (btn) {
           if (isAuth) {
-            btn.textContent = '▶ Wiederaufnahme (Resume)';
+            btn.textContent = '▶ Trading starten';
             btn.className = 'ab-toggle-btn running';
             btn.disabled = false;
-            btn.title = 'Worker wieder anfahren';
+            btn.title = 'Autonomen Bot starten';
           } else {
             btn.textContent = '🔒 Operator-Anmeldung erforderlich';
             btn.className = 'ab-toggle-btn';
             btn.disabled = true;
-            btn.title = 'Nur angemeldete Operatoren können Not-Halt oder Wiederaufnahme steuern';
+            btn.title = 'Nur angemeldete Operatoren können Trading pausieren oder starten';
           }
         }
       } else if (this.worker && this.worker.is_stale) {
@@ -11280,7 +11284,7 @@ const Autobot = {
         badge.style.color = '#f59e0b';
         if (btn) {
           if (isAuth) {
-            btn.textContent = '⏹ Not-Halt anfordern';
+            btn.textContent = '⏸ Trading pausieren';
             btn.className = 'ab-toggle-btn';
             btn.disabled = false;
           } else {
@@ -11290,14 +11294,14 @@ const Autobot = {
           }
         }
       } else if (this.worker && this.worker.status === 'RUNNING') {
-        badge.textContent = `● SERVER RUNNING (${this.worker.data_age_seconds || 0}s)`;
+        badge.textContent = `● TRADING AKTIV (${this.worker.data_age_seconds || 0}s)`;
         badge.className = 'autobot-status-badge active';
         badge.style.background = 'rgba(45,212,191,.2)';
         badge.style.borderColor = '#2dd4bf';
         badge.style.color = '#2dd4bf';
         if (btn) {
           if (isAuth) {
-            btn.textContent = '⏹ Not-Halt anfordern';
+            btn.textContent = '⏸ Trading pausieren';
             btn.className = 'ab-toggle-btn';
             btn.disabled = false;
           } else {
@@ -11313,7 +11317,7 @@ const Autobot = {
         if (pub && pub.worker_known === true && !pub.stale) {
           if (pub.is_halted) {
             if (badge) {
-              badge.textContent = '⏹ NOT-HALT (Einstiege gesperrt)';
+              badge.textContent = '⏸ PAUSIERT (Keine neuen Trades)';
               badge.className = 'autobot-status-badge';
               if (badge.style) { badge.style.background = 'rgba(239,68,68,.2)'; badge.style.borderColor = '#ef4444'; badge.style.color = '#ef4444'; }
             }
@@ -11339,7 +11343,7 @@ const Autobot = {
           }
         }
         if (btn) {
-          btn.textContent = isAuth ? '⏹ Not-Halt anfordern' : '🔒 Operator-Anmeldung erforderlich';
+          btn.textContent = isAuth ? '⏸ Trading pausieren' : '🔒 Operator-Anmeldung erforderlich';
           btn.disabled = !isAuth;
         }
       }

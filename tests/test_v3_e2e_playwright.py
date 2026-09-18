@@ -392,13 +392,13 @@ def test_scenario_e_halt_and_prevent_new_entries(e2e_environment):
         # Warten bis Worker den Not-Halt quittiert (Command-Queue → DB-Write → API-Poll)
         # Worst-Case: 0.3s Worker-Zyklus + 2s SyncEngine-Poll = ~3s; 5s Timeout mit Margin
         page.wait_for_function(
-            "() => { const b = document.getElementById('ab-status-badge'); return b && b.innerText.includes('NOT-HALT'); }",
+            "() => { const b = document.getElementById('ab-status-badge'); return b && b.innerText.includes('PAUSIERT'); }",
             timeout=5000
         )
         badge = page.locator("#ab-status-badge")
-        assert "NOT-HALT" in badge.inner_text()
+        assert "PAUSIERT" in badge.inner_text()
         toggle_btn = page.locator("#btn-toggle-autobot")
-        assert "Wiederaufnahme" in toggle_btn.inner_text()
+        assert "Trading starten" in toggle_btn.inner_text()
 
         page.screenshot(path=str(SCREENSHOT_DIR / "04_scenario_e_halt_confirmed.png"))
         browser.close()
@@ -475,7 +475,7 @@ def test_scenario_g_resume_and_resumption(e2e_environment):
     """Szenario G: Resume und Wiederaufnahme nach definierter Policy.
 
     Policy: Nach Resume wechselt der Worker von HALTED nach RECOVERING.
-    Der Dashboard-Button wechselt von 'Wiederaufnahme' zu 'Not-Halt anfordern'.
+    Der Dashboard-Button wechselt von 'Trading starten' zu 'Trading pausieren'.
     RECOVERING ist ein valider Post-Resume-Zustand (kein Warmup-Feed im Mock).
     """
     base_url = e2e_environment["base_url"]
@@ -504,20 +504,20 @@ def test_scenario_g_resume_and_resumption(e2e_environment):
         page.goto(base_url, wait_until="domcontentloaded")
         _login(page, base_url, token)
 
-        # Badge muss NOT-HALT zeigen (Worker ist HALTED)
+        # Badge muss PAUSIERT zeigen (Worker ist HALTED)
         page.wait_for_function(
-            "() => { const b = document.getElementById('ab-status-badge'); return b && b.innerText.includes('NOT-HALT'); }",
+            "() => { const b = document.getElementById('ab-status-badge'); return b && b.innerText.includes('PAUSIERT'); }",
             timeout=5000
         )
 
-        # Resume Button klicken (zeigt "Wiederaufnahme (Resume)")
+        # Resume Button klicken (zeigt "Trading starten")
         page.locator("#btn-toggle-autobot").click()
 
         # Warten bis Worker Resume quittiert und Badge wechselt
         # RECOVERING ist valider Post-Resume-Zustand — kein Warmup-Feed im Mock
         page.wait_for_function(
             "() => { const b = document.getElementById('ab-status-badge'); "
-            "return b && !b.innerText.includes('NOT-HALT'); }",
+            "return b && !b.innerText.includes('PAUSIERT'); }",
             timeout=6000
         )
         badge = page.locator("#ab-status-badge")
@@ -526,9 +526,9 @@ def test_scenario_g_resume_and_resumption(e2e_environment):
         assert any(s in badge_text for s in ["RUNNING", "RECOVERING", "WARMING"]), (
             f"Badge zeigt nach Resume unerwarteten Zustand: '{badge_text}'"
         )
-        # Toggle-Button zeigt nicht mehr 'Wiederaufnahme'
+        # Toggle-Button zeigt nicht mehr 'Trading starten'
         toggle_btn = page.locator("#btn-toggle-autobot")
-        assert "Wiederaufnahme" not in toggle_btn.inner_text()
+        assert "Trading starten" not in toggle_btn.inner_text()
 
         page.screenshot(path=str(SCREENSHOT_DIR / "05_scenario_g_resumed_running.png"))
         browser.close()

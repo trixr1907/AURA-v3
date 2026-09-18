@@ -21,8 +21,8 @@ from aura.api.auth import (
     create_session,
     destroy_session,
     get_configured_token,
+    get_session_data,
     is_valid_token,
-    is_valid_session,
     record_failed_login,
     verify_auth_token,
 )
@@ -118,7 +118,8 @@ def login_operator(payload: LoginRequest, request: Request, response: Response):
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_login_rate_limit(client_ip)
 
-    if not is_valid_token(payload.token.strip()):
+    token_clean = payload.token.strip()
+    if not is_valid_token(token_clean):
         record_failed_login(client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -126,7 +127,12 @@ def login_operator(payload: LoginRequest, request: Request, response: Response):
         )
     clear_failed_logins(client_ip)
 
-    session_id = create_session()
+    # Konto wird beim Login serverseitig an die Session gebunden (nicht per Client-Query
+    # nachtraeglich waehlbar) -- verhindert, dass eine Session mit dem eigenen Token das
+    # jeweils andere Konto einsehen/zuruecksetzen kann.
+    account_id = "buddy" if "buddy" in token_clean.lower() else "master"
+    user_name = "Kumpel (Buddy)" if account_id == "buddy" else "Ivo (Master)"
+    session_id = create_session(account_id=account_id, user_name=user_name)
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -139,7 +145,7 @@ def login_operator(payload: LoginRequest, request: Request, response: Response):
     return GenericResponse(
         ok=True,
         message="Anmeldung erfolgreich",
-        data={"authenticated": True, "role": "operator"},
+        data={"authenticated": True, "role": "operator", "account": account_id, "user_name": user_name},
     )
 
 
@@ -158,8 +164,15 @@ def logout_operator(request: Request, response: Response):
 @router.get("/auth/status", response_model=AuthStatusResponse)
 def get_auth_status(request: Request):
     session_cookie = request.cookies.get(SESSION_COOKIE_NAME)
-    if is_valid_session(session_cookie):
-        return AuthStatusResponse(ok=True, authenticated=True, role="operator")
+    sdata = get_session_data(session_cookie)
+    if sdata is not None:
+        return AuthStatusResponse(
+            ok=True,
+            authenticated=True,
+            role="operator",
+            account=sdata.get("account_id", "master"),
+            user_name=sdata.get("user_name", "Ivo (Master)"),
+        )
 
     auth_header = request.headers.get("Authorization")
     x_token = request.headers.get("X-AURA-TOKEN")
@@ -208,13 +221,23 @@ def get_status(sm: RunnerStateMachine = Depends(get_state_machine), pe: PaperTra
 
 @router.get("/state")
 def get_state(
+    request: Request,
     account: str = Query(default="master"),
     sm: RunnerStateMachine = Depends(get_state_machine),
     pe: PaperTradingEngine = Depends(get_paper_engine),
     db: sqlite3.Connection = Depends(get_db),
     _token: str = Depends(verify_auth_token),
 ):
-    acc = account if account in ("master", "buddy") else "master"
+    # Sicherheit: Bei Session-Cookie-Auth ist das Konto server-seitig an die Session
+    # gebunden (beim Login festgelegt) und darf NICHT per Query-Param ueberschrieben
+    # werden -- sonst koennte eine Buddy-Session per ?account=master das Master-Konto
+    # einsehen. Nur bei reiner Token-Auth (kein Cookie) zaehlt der Query-Param.
+    session_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    sdata = get_session_data(session_cookie)
+    if sdata is not None:
+        acc = sdata.get("account_id", "master")
+    else:
+        acc = account if account in ("master", "buddy") else "master"
     pe = PaperTradingEngine(conn=db, account_id=acc)
     # 1. Lade aktive Config-Revision
     cur = db.cursor()
@@ -542,11 +565,20 @@ def close_trade_manually(
 @router.post("/account/reset", response_model=GenericResponse)
 def reset_account_endpoint(
     payload: ResetAccountRequest,
+    request: Request,
     _token: str = Depends(verify_auth_token),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Reiht ein Konto-Reset ueber die Control-Plane ein (Worker fuehrt es aus)."""
-    acc = payload.account if payload.account in ("master", "buddy") else "master"
+    """Reiht ein Konto-Reset ueber die Control-Plane ein (Worker fuehrt es aus).
+
+    Bei Session-Cookie-Auth ist das Zielkonto an die Session gebunden (siehe /state);
+    das Body-Feld 'account' zaehlt nur bei reiner Token-Auth ohne Cookie.
+    """
+    sdata = get_session_data(request.cookies.get(SESSION_COOKIE_NAME))
+    if sdata is not None:
+        acc = sdata.get("account_id", "master")
+    else:
+        acc = payload.account if payload.account in ("master", "buddy") else "master"
     command_id = _enqueue_command(db, "reset_account", {"account": acc})
     return GenericResponse(
         ok=True,
@@ -558,6 +590,7 @@ def reset_account_endpoint(
 @router.post("/history/clear", response_model=GenericResponse)
 def clear_history_endpoint(
     payload: ResetAccountRequest,
+    request: Request,
     _token: str = Depends(verify_auth_token),
     db: sqlite3.Connection = Depends(get_db),
 ):
@@ -566,9 +599,14 @@ def clear_history_endpoint(
     Im Unterschied zu account/reset betrifft dies ausschliesslich bereits abgeschlossene
     (status != 'open') Datensaetze; der Worker haelt closed_positions ohnehin nur als
     Anzeige-Cache und laedt sie beim naechsten Zyklus per _load_state_from_db_if_available()
-    neu, ein direkter DELETE ist hier also sicher.
+    neu, ein direkter DELETE ist hier also sicher. Wie bei /account/reset gilt: Session-Cookie
+    bindet das Zielkonto, das Body-Feld zaehlt nur bei reiner Token-Auth.
     """
-    acc = payload.account if payload.account in ("master", "buddy") else "master"
+    sdata = get_session_data(request.cookies.get(SESSION_COOKIE_NAME))
+    if sdata is not None:
+        acc = sdata.get("account_id", "master")
+    else:
+        acc = payload.account if payload.account in ("master", "buddy") else "master"
     with db:
         db.execute("DELETE FROM trades WHERE account_id = ? AND status != 'open'", (acc,))
     return GenericResponse(ok=True, message=f"Historie fuer Konto '{acc}' erfolgreich geleert")

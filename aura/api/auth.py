@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -22,8 +22,8 @@ AUTH_TOKEN_ENV_VAR = "AURA_RELAY_TOKEN"
 SESSION_COOKIE_NAME = "aura_session"
 SESSION_DURATION_SEC = 86400  # 24 Stunden
 
-# In-Memory Session Store: session_id -> expires_at_ts
-_ACTIVE_SESSIONS: dict[str, float] = {}
+# In-Memory Session Store: session_id -> {expires_at, account_id, user_name}
+_ACTIVE_SESSIONS: dict[str, dict[str, Any]] = {}
 
 # In-Memory Rate Limiter fuer Login-Fehlversuche: client_ip -> list[timestamp]
 _FAILED_LOGINS: dict[str, list[float]] = {}
@@ -56,20 +56,30 @@ def clear_failed_logins(client_ip: str) -> None:
     _FAILED_LOGINS.pop(client_ip, None)
 
 
-def create_session() -> str:
-    """Erzeugt eine kryptografisch sichere Session-ID."""
+def create_session(account_id: str = "master", user_name: str = "Ivo (Master)") -> str:
+    """Erzeugt eine kryptografisch sichere Session-ID, gebunden an ein Konto."""
     session_id = secrets.token_hex(32)
-    _ACTIVE_SESSIONS[session_id] = time.time() + SESSION_DURATION_SEC
+    _ACTIVE_SESSIONS[session_id] = {
+        "expires_at": time.time() + SESSION_DURATION_SEC,
+        "account_id": account_id,
+        "user_name": user_name,
+    }
     return session_id
 
 
-def is_valid_session(session_id: str | None) -> bool:
+def get_session_data(session_id: str | None) -> dict[str, Any] | None:
+    """Liefert die an eine Session gebundenen Daten (account_id, user_name) oder None."""
     if not session_id or session_id not in _ACTIVE_SESSIONS:
-        return False
-    if time.time() > _ACTIVE_SESSIONS[session_id]:
+        return None
+    data = _ACTIVE_SESSIONS[session_id]
+    if time.time() > data["expires_at"]:
         _ACTIVE_SESSIONS.pop(session_id, None)
-        return False
-    return True
+        return None
+    return data
+
+
+def is_valid_session(session_id: str | None) -> bool:
+    return get_session_data(session_id) is not None
 
 
 def destroy_session(session_id: str | None) -> None:
