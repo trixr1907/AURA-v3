@@ -15,4 +15,4 @@
 - **Control Plane (`aura-api`):** FastAPI, Uvicorn, Token-Session-Auth auf Port 8000.
 - **Execution Engine (`aura-worker`):** Autonomer Headless Runner, DB-Poller, Bitget-WebSockets/REST.
 - **Storage:** SQLite im WAL-Modus auf `/data/aura_state.db`.
-- **UI:** `aura_ux_preview.html` als reaktives Frontend direkt auf Root `/`.
+- **UI:** Vollwertiges High-Tech Quant-Terminal (`dashboard.html`) direkt auf Root `/`. Schlankes Touch/Mobile-Terminal unter `/preview` (`aura_ux_preview.html`).
