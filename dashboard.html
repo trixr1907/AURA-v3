@@ -9931,6 +9931,9 @@ const SyncEngine = {
         Autobot.missingCostsNotice = s.missing_costs_notice;
         Autobot.marketData = s.market_data;
         Autobot.radar = s.radar || [];
+        if (s.funnel24h) {
+          renderFunnel24h(s.funnel24h);
+        }
 
         if (Array.isArray(s.open_positions)) {
           Autobot.trades = s.open_positions.map(p => ({
@@ -11421,7 +11424,7 @@ const Autobot = {
 
     const funnelEl = $('ab-funnel-summary');
     if (funnelEl) {
-      const scanAgeSec = this.lastScanAt ? Math.max(0, Math.floor((Date.now() - this.lastScanAt) / 1000)) : null;
+      const scanAgeSec = this.lastScanAt ? Math.max(0, Math.floor((Date.now() - this.lastScanAt) / 1000)) : (this.worker && Number.isFinite(+this.worker.data_age_seconds) ? Math.floor(+this.worker.data_age_seconds) : null);
       const scanAgeText = scanAgeSec !== null ? `Letzter Scan: vor ${scanAgeSec}s` : 'Letzter Scan: ausstehend';
       if (this.lastScanFunnel) {
         const f = this.lastScanFunnel;

@@ -355,6 +355,31 @@ def get_state(
         for r in cur.fetchall()
     ]
 
+    # 6b. 24h Funnel-Aggregation (Glasbox-Transparenz: wie viele Setups wurden
+    # im letzten Tag gescannt/akzeptiert/abgelehnt, aus dem Append-only Shadow-Log).
+    cutoff_24h_ms = now_ms - (24 * 3600 * 1000)
+    cur.execute(
+        "SELECT score, decision, reject_reason FROM shadow_log WHERE ts_ms >= ?",
+        (cutoff_24h_ms,),
+    )
+    funnel_rows = cur.fetchall()
+    funnel_scanned = len(funnel_rows)
+    funnel_selected = sum(1 for r in funnel_rows if r["decision"] == "ACCEPTED")
+    funnel_reject_reasons: dict[str, int] = {}
+    for r in funnel_rows:
+        reason = r["reject_reason"]
+        if reason:
+            funnel_reject_reasons[reason] = funnel_reject_reasons.get(reason, 0) + 1
+    funnel_24h = {
+        "scanned": funnel_scanned,
+        "selected": funnel_selected,
+        # Radar/WF-Teilstufen sind in v3 noch nicht separat instrumentiert;
+        # bis dahin identisch zu "scanned" statt eine falsche Praezision vorzutaeuschen.
+        "radar_passed": funnel_scanned,
+        "wf_evaluated": funnel_scanned,
+        "reject_reasons": funnel_reject_reasons,
+    }
+
     # Performance Metriken
     total_realized = sum(p.realized_pnl for p in pe.closed_positions)
     total_unrealized = sum(p.unrealized_pnl for p in pe.open_positions.values())
@@ -445,6 +470,7 @@ def get_state(
         "pending_commands": pending_cmds,
         "rejected_commands": rejected_cmds,
         "radar": radar_rows,
+        "funnel24h": funnel_24h,
         "model_status": "MODEL_NO_EVIDENCE",
         "missing_costs_notice": "Hinweis: 8h-Funding und TP3-Tranchen sind in dieser v3-Version noch nicht modelliert. Status: MODEL_NO_EVIDENCE.",
     }
