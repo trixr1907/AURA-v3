@@ -213,3 +213,14 @@ class TestApiSessionAuthAndConflict:
         resp = api_client.post("/api/v3/config", json=payload, headers=headers)
         assert resp.status_code == 409
         assert "Konfigurationskonflikt" in str(resp.json())
+
+    def test_multi_token_support(self, api_client: TestClient, monkeypatch):
+        monkeypatch.setenv("AURA_RELAY_TOKEN", "token_ivo_123, token_buddy_456")
+        from aura.api.auth import is_valid_token
+        assert is_valid_token("token_ivo_123") is True
+        assert is_valid_token("token_buddy_456") is True
+        assert is_valid_token("wrong_token") is False
+
+        resp = api_client.post("/api/v3/auth/login", json={"token": "token_buddy_456"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True

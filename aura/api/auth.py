@@ -77,12 +77,25 @@ def destroy_session(session_id: str | None) -> None:
         _ACTIVE_SESSIONS.pop(session_id, None)
 
 
+def get_configured_tokens() -> list[str]:
+    raw = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
+    if not raw:
+        return ["aura_dev_insecure_token_change_in_prod"]
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    return tokens if tokens else ["aura_dev_insecure_token_change_in_prod"]
+
+
 def get_configured_token() -> str:
-    token = os.environ.get(AUTH_TOKEN_ENV_VAR, "").strip()
-    if not token:
-        # Falls in DEV kein Token gesetzt ist, nutzen wir einen definierten Entwicklungs-Token
-        token = "aura_dev_insecure_token_change_in_prod"
-    return token
+    return get_configured_tokens()[0]
+
+
+def is_valid_token(token_to_check: str) -> bool:
+    valid_tokens = get_configured_tokens()
+    matched = False
+    for t in valid_tokens:
+        if secrets.compare_digest(token_to_check, t):
+            matched = True
+    return matched
 
 
 def verify_auth_token(
@@ -132,7 +145,7 @@ def verify_auth_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not secrets.compare_digest(token_to_check, configured):
+    if not is_valid_token(token_to_check):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Zugriff verweigert: Ungueltiger Authentifizierungs-Token",

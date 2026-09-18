@@ -21,6 +21,7 @@ from aura.api.auth import (
     create_session,
     destroy_session,
     get_configured_token,
+    is_valid_token,
     is_valid_session,
     record_failed_login,
     verify_auth_token,
@@ -116,8 +117,7 @@ def login_operator(payload: LoginRequest, request: Request, response: Response):
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_login_rate_limit(client_ip)
 
-    configured = get_configured_token()
-    if not secrets.compare_digest(payload.token.strip(), configured):
+    if not is_valid_token(payload.token.strip()):
         record_failed_login(client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
