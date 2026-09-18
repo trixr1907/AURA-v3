@@ -9450,6 +9450,15 @@ function bindRadarDrawer() {
 const _auraRoot = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this);
 _auraRoot.AuraApp = {
   isAuthenticated: false,
+  currentAccount: 'master',
+  switchAccount(acc) {
+    this.currentAccount = acc;
+    const sel = document.getElementById('sel-account-tenant');
+    if (sel) sel.value = acc;
+    if (typeof SyncEngine !== 'undefined' && SyncEngine.pull) {
+      SyncEngine.pull();
+    }
+  },
   showLogin() {
     if (typeof document === 'undefined') return;
     const modal = $('aura-auth-modal');
