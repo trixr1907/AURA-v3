@@ -1,0 +1,30 @@
+{
+  "_signal_claims": {
+    "evt_claim_test_123": 100000
+  },
+  "schema_version": 2,
+  "rev": 17,
+  "_updated_at": 1789743648,
+  "_rev": 17,
+  "aura-quant-terminal-active-trades-v1": [
+    {
+      "id": "keep-id",
+      "record_schema": 2
+    },
+    {
+      "id": "atomic-active",
+      "coin": "BTCUSDT",
+      "record_schema": 2
+    }
+  ],
+  "aura-autobot-state-v2": {
+    "enabled": true
+  },
+  "aura-quant-terminal-history-trades-v1": [
+    {
+      "id": "atomic-history",
+      "tradeId": "atomic-active",
+      "record_schema": 2
+    }
+  ]
+}
