@@ -55,6 +55,10 @@ class CloseTradeRequest(BaseModel):
     reason: str = Field(default="manual_close", description="Schliessungsbegruendung")
 
 
+class ResetAccountRequest(BaseModel):
+    account: str = Field(default="master", description="Konto-ID (master|buddy) zum Zuruecksetzen")
+
+
 class GenericResponse(BaseModel):
     ok: bool
     message: str

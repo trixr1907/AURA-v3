@@ -293,6 +293,10 @@ class AuraWorkerService:
                     )
                 applied = True
                 result = f"config revision {revision} applied by {self.instance_id}"
+            elif command_type == "close_trade":
+                applied, result = self._apply_close_trade_command(payload)
+            elif command_type == "reset_account":
+                applied, result = self._apply_reset_account_command(payload)
             else:
                 result = f"unsupported command type: {command_type}"
 
@@ -307,6 +311,59 @@ class AuraWorkerService:
                         command_id,
                     ),
                 )
+
+    def _apply_close_trade_command(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """Schliesst einen offenen Trade server-authoritativ ueber die zustaendige Account-Engine.
+
+        Sucht die Position kontouebergreifend, da die API den Account des Traders
+        zum Enqueue-Zeitpunkt nicht zuverlaessig kennt (Operator kann jedes Konto bedienen).
+        """
+        trade_id = str(payload.get("trade_id") or "")
+        reason = str(payload.get("reason") or "manual_close")
+        if not trade_id:
+            return False, "close_trade: trade_id fehlt"
+
+        for acc_id, eng in self.engines.items():
+            pos = eng.open_positions.get(trade_id)
+            if pos is None:
+                continue
+            snapshot = {
+                "open_positions": copy.deepcopy(eng.open_positions),
+                "closed_positions": copy.deepcopy(eng.closed_positions),
+                "equity": eng.equity,
+            }
+            try:
+                with self.conn:
+                    eng._close_full(pos, exit_price=pos.entry_price, time_ms=int(self.time_provider() * 1000), reason=reason)
+                    eng.open_positions.pop(trade_id, None)
+                    eng.closed_positions.append(pos)
+            except BaseException:
+                eng.open_positions = snapshot["open_positions"]
+                eng.closed_positions = snapshot["closed_positions"]
+                eng.equity = snapshot["equity"]
+                raise
+            return True, f"trade {trade_id} closed on account {acc_id} by {self.instance_id}"
+
+        return False, f"close_trade: kein offener Trade mit ID {trade_id} gefunden"
+
+    def _apply_reset_account_command(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """Setzt ein Konto server-authoritativ auf Startkapital zurueck und loescht alle Trades.
+
+        Laeuft im Worker-Prozess, damit der In-Memory-Engine-State (self.engines) synchron
+        mit der DB bleibt -- ein reiner API-seitiger DELETE wuerde vom naechsten Worker-Zyklus
+        ueberschrieben (Persistenz laeuft ausschliesslich ueber die Worker-Engine).
+        """
+        acc_id = str(payload.get("account") or "master")
+        if acc_id not in self.engines:
+            return False, f"reset_account: unbekanntes Konto {acc_id}"
+
+        eng = self.engines[acc_id]
+        with self.conn:
+            self.conn.execute("DELETE FROM trades WHERE account_id = ?", (acc_id,))
+        eng.open_positions.clear()
+        eng.closed_positions.clear()
+        eng.equity = eng.starting_equity
+        return True, f"account {acc_id} reset to {eng.starting_equity} by {self.instance_id}"
 
     def _run_cycle(self, cycle: int) -> None:
         logger.debug("Worker-Zyklus #%d gestartet...", cycle)

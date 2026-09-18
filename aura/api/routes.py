@@ -34,6 +34,7 @@ from aura.api.schemas import (
     HaltRequest,
     HealthResponse,
     LoginRequest,
+    ResetAccountRequest,
     ResumeRequest,
 )
 from aura.runner.paper_engine import PaperTradingEngine
@@ -522,19 +523,55 @@ def resume_from_emergency_halt(
 def close_trade_manually(
     payload: CloseTradeRequest,
     _token: str = Depends(verify_auth_token),
-    pe: PaperTradingEngine = Depends(get_paper_engine),
+    db: sqlite3.Connection = Depends(get_db),
 ):
-    if payload.trade_id not in pe.open_positions:
-        raise HTTPException(status_code=404, detail=f"Kein offener Trade mit ID {payload.trade_id} gefunden")
+    """Reiht das Schliessen eines Trades ueber die Control-Plane ein.
 
-    pos = pe.open_positions[payload.trade_id]
-    # Schliesse zum aktuellen Einstiegspreis bzw. SL als Fallback
-    pe._close_full(pos, exit_price=pos.entry_price, time_ms=int(time.time() * 1000), reason=payload.reason)
-    if payload.trade_id in pe.open_positions:
-        pe.open_positions.pop(payload.trade_id)
-        pe.closed_positions.append(pos)
+    Der Worker-Prozess haelt den kanonischen In-Memory-Engine-Zustand; ein direkter
+    Schreibzugriff der API auf die trades-Tabelle wuerde vom naechsten Worker-Zyklus
+    ueberschrieben (siehe halt/resume/set_config fuer das etablierte Muster).
+    """
+    command_id = _enqueue_command(db, "close_trade", payload.model_dump())
+    return GenericResponse(
+        ok=True,
+        message=f"Schliessen von Trade {payload.trade_id} angefordert",
+        data={"command_id": command_id, "status": "pending"},
+    )
 
-    return GenericResponse(ok=True, message=f"Trade {payload.trade_id} erfolgreich geschlossen")
+
+@router.post("/account/reset", response_model=GenericResponse)
+def reset_account_endpoint(
+    payload: ResetAccountRequest,
+    _token: str = Depends(verify_auth_token),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Reiht ein Konto-Reset ueber die Control-Plane ein (Worker fuehrt es aus)."""
+    acc = payload.account if payload.account in ("master", "buddy") else "master"
+    command_id = _enqueue_command(db, "reset_account", {"account": acc})
+    return GenericResponse(
+        ok=True,
+        message=f"Zuruecksetzen von Konto '{acc}' angefordert",
+        data={"command_id": command_id, "status": "pending"},
+    )
+
+
+@router.post("/history/clear", response_model=GenericResponse)
+def clear_history_endpoint(
+    payload: ResetAccountRequest,
+    _token: str = Depends(verify_auth_token),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Loescht nur geschlossene Trades eines Kontos direkt (kein Live-Engine-State betroffen).
+
+    Im Unterschied zu account/reset betrifft dies ausschliesslich bereits abgeschlossene
+    (status != 'open') Datensaetze; der Worker haelt closed_positions ohnehin nur als
+    Anzeige-Cache und laedt sie beim naechsten Zyklus per _load_state_from_db_if_available()
+    neu, ein direkter DELETE ist hier also sicher.
+    """
+    acc = payload.account if payload.account in ("master", "buddy") else "master"
+    with db:
+        db.execute("DELETE FROM trades WHERE account_id = ? AND status != 'open'", (acc,))
+    return GenericResponse(ok=True, message=f"Historie fuer Konto '{acc}' erfolgreich geleert")
 
 
 @router.get("/history")

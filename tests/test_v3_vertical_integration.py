@@ -393,6 +393,117 @@ class TestCrossProcessControlPlane:
         assert worker.long_threshold == 72.0
         assert worker.short_threshold == 28.0
 
+    def test_close_trade_command_closes_position_on_worker_engine(self, tmp_path, monkeypatch):
+        """API enqueues close_trade; only the worker's own engine may mutate open_positions."""
+        monkeypatch.setenv("AURA_RELAY_TOKEN", "cross-process-test-token")
+        db_path = tmp_path / "close-trade-control-plane.db"
+        api_conn = connect(db_path)
+        app = create_app(
+            conn=api_conn,
+            state_machine=RunnerStateMachine(SystemState.RUNNING),
+            paper_engine=PaperTradingEngine(conn=api_conn),
+        )
+        client = _make_authenticated_client(app)
+
+        worker = AuraWorkerService(db_path=str(db_path), symbols=["BTCUSDT"])
+        spec = {"ctVal": 0.01, "minSize": 0.01, "minNotional": 5.0}
+        plan = worker.engine.create_execution_plan(
+            symbol="BTCUSDT",
+            direction=1,
+            reference_price=50000.0,
+            sl_price=49000.0,
+            tp1_price=51000.0,
+            tp2_price=52000.0,
+            spec=spec,
+        )
+        pos = worker.engine.execute_plan(plan)
+        assert pos is not None
+        trade_id = pos.trade_id
+        assert trade_id in worker.engine.open_positions
+
+        # A direct write to a competing engine (simulating a naive API-side mutation)
+        # must NOT be what closes the trade -- only the worker's own command processing may.
+        response = client.post(
+            "/api/v3/trades/close",
+            json={"trade_id": trade_id, "reason": "MANUAL_TEST"},
+            headers={"X-AURA-TOKEN": "cross-process-test-token"},
+        )
+        assert response.status_code == 200
+        command_id = response.json()["data"]["command_id"]
+        assert response.json()["data"]["status"] == "pending"
+
+        # Before the worker processes the command, the position must still be open
+        # (proves the API did not mutate trades directly).
+        assert trade_id in worker.engine.open_positions
+
+        worker._apply_control_plane_commands()
+
+        assert trade_id not in worker.engine.open_positions
+        assert any(p.trade_id == trade_id for p in worker.engine.closed_positions)
+        row = worker.conn.execute(
+            "SELECT status, exit_reason FROM trades WHERE id = ?", (trade_id,)
+        ).fetchone()
+        assert row["status"] == "closed"
+        assert row["exit_reason"] == "MANUAL_TEST"
+
+        cmd_row = worker.conn.execute(
+            "SELECT status FROM commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        assert cmd_row["status"] == "applied"
+
+    def test_reset_account_command_clears_trades_and_restores_equity(self, tmp_path, monkeypatch):
+        """API enqueues reset_account; worker clears its own engine + DB rows for that account."""
+        monkeypatch.setenv("AURA_RELAY_TOKEN", "cross-process-test-token")
+        db_path = tmp_path / "reset-account-control-plane.db"
+        api_conn = connect(db_path)
+        app = create_app(
+            conn=api_conn,
+            state_machine=RunnerStateMachine(SystemState.RUNNING),
+            paper_engine=PaperTradingEngine(conn=api_conn),
+        )
+        client = _make_authenticated_client(app)
+
+        worker = AuraWorkerService(db_path=str(db_path), symbols=["BTCUSDT"])
+        spec = {"ctVal": 0.01, "minSize": 0.01, "minNotional": 5.0}
+        plan = worker.engine.create_execution_plan(
+            symbol="BTCUSDT",
+            direction=1,
+            reference_price=50000.0,
+            sl_price=49000.0,
+            tp1_price=51000.0,
+            tp2_price=52000.0,
+            spec=spec,
+        )
+        pos = worker.engine.execute_plan(plan)
+        assert pos is not None
+        assert len(worker.engine.open_positions) == 1
+
+        response = client.post(
+            "/api/v3/account/reset",
+            json={"account": "master"},
+            headers={"X-AURA-TOKEN": "cross-process-test-token"},
+        )
+        assert response.status_code == 200
+        command_id = response.json()["data"]["command_id"]
+
+        # Not yet processed by the worker -> must still be present.
+        assert len(worker.engine.open_positions) == 1
+
+        worker._apply_control_plane_commands()
+
+        assert worker.engine.open_positions == {}
+        assert worker.engine.closed_positions == []
+        assert worker.engine.equity == worker.engine.starting_equity
+        remaining = worker.conn.execute(
+            "SELECT COUNT(*) AS c FROM trades WHERE account_id = 'master'"
+        ).fetchone()
+        assert remaining["c"] == 0
+
+        cmd_row = worker.conn.execute(
+            "SELECT status FROM commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        assert cmd_row["status"] == "applied"
+
 
 class TestBitgetOnlineIntegration:
     def test_live_bitget_public_feed_and_validation(self):
