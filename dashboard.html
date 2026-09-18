@@ -431,6 +431,15 @@ button.act{height:34px;border:0;border-radius:8px;background:#e2e8f0;color:#0911
         </div>
       </div>
       <div>
+        <div class="lbl">Konto-Auswahl</div>
+        <div style="display:inline-flex;align-items:center;background:rgba(15,23,42,.9);border:1px solid #38bdf8;padding:0 6px;border-radius:6px;height:28px">
+          <select id="sel-account-tenant" onchange="window.AuraApp && window.AuraApp.switchAccount(this.value);" style="background:transparent;border:none;color:#38bdf8;font-size:11px;font-weight:700;cursor:pointer;outline:none">
+            <option value="master" style="background:#0f172a;color:#38bdf8">👤 Ivo (Master)</option>
+            <option value="buddy" style="background:#0f172a;color:#38bdf8">👤 Kumpel (Buddy)</option>
+          </select>
+        </div>
+      </div>
+      <div>
         <div class="lbl">&nbsp;</div>
         <button class="act" id="refresh">⟳ Live-Update</button>
       </div>
@@ -9475,6 +9484,11 @@ _auraRoot.AuraApp = {
       });
       if (resp.ok) {
         this.isAuthenticated = true;
+        if (token.includes('buddy')) {
+          this.switchAccount('buddy');
+        } else {
+          this.switchAccount('master');
+        }
         this.dismissLogin();
         const authPill = $('auth-status-pill');
         if (authPill) {
@@ -9685,7 +9699,8 @@ const SyncEngine = {
         this.isPulling = false;
         return;
       }
-      const res = await fetch('/api/v3/state', { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
+      const acc = (typeof AuraApp !== 'undefined' && AuraApp.currentAccount) ? AuraApp.currentAccount : 'master';
+      const res = await fetch('/api/v3/state?account=' + acc, { method: 'GET', credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           this.setStatus('offline', 'Anmeldung erforderlich');

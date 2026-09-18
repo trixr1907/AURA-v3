@@ -71,7 +71,12 @@ class AuraWorkerService:
         self.sm = RunnerStateMachine(SystemState.STARTING)
         self.adapter: Any = BitgetMarketAdapter()
         engine_cfg = EngineConfig(risk_per_trade_pct=self.risk_per_trade_pct, max_open_positions=self.max_open_positions)
-        self.engine = PaperTradingEngine(config=engine_cfg, conn=self.conn)
+        self.accounts = ["master", "buddy"]
+        self.engines: dict[str, PaperTradingEngine] = {
+            acc: PaperTradingEngine(config=engine_cfg, conn=self.conn, account_id=acc)
+            for acc in self.accounts
+        }
+        self.engine = self.engines["master"]
 
         ntfy_url = os.environ.get("AURA_NTFY_URL", "")
         ntfy_cfg = NotificationConfig(enabled=bool(ntfy_url), topic_url=ntfy_url)
@@ -377,13 +382,15 @@ class AuraWorkerService:
                     return
 
                 # 2. Bar-Updates fuer bestehende offene Positionen (SL, TP1, TP2, Timestop)
-                closed = self.engine.on_bar_update(
-                    symbol=sym,
-                    high=last_bar.high,
-                    low=last_bar.low,
-                    close=last_bar.close,
-                    bar_time_ms=last_bar.time_ms,
-                )
+                closed = []
+                for acc_id, eng in self.engines.items():
+                    closed.extend(eng.on_bar_update(
+                        symbol=sym,
+                        high=last_bar.high,
+                        low=last_bar.low,
+                        close=last_bar.close,
+                        bar_time_ms=last_bar.time_ms,
+                    ))
                 for pos in closed:
                     pending_alerts.append({
                         "title": f"AURA Trade Closed: {pos.symbol}",
@@ -753,42 +760,31 @@ class AuraWorkerService:
                 "priceTick": str(price_tick),
             }
             leverage = min(10, int(spec_row["max_leverage"]))
-            risk_budget = Decimal(str(self.engine.equity)) * Decimal(str(self.engine.config.risk_per_trade_pct)) / Decimal("100")
-
-            # Kanonischen Ausfuehrungsplan auf effektivem Fill (nach Slippage/Tick) und gequantelten Schutzleveln bilden:
-            plan = self.engine.create_execution_plan(
-                symbol=symbol,
-                direction=direction,
-                reference_price=current_price,
-                sl_price=sl_price,
-                tp1_price=tp1_price,
-                tp2_price=tp2_price,
-                spec=spec,
-                leverage=leverage,
-                risk_budget=risk_budget,
-            )
-            if not plan.levels_valid:
-                self._log_decision(symbol, candles[-1].time_ms, direction, score, "REJECTED", plan.error_reason or "Ungueltiger Ausfuehrungsplan")
-                return None
-
-            # Liquiditaetspruefung strikt auf dem finalen Notional des Ausfuehrungsplans:
             decision_time_ms = int(self.time_provider() * 1000)
-            if not self._liquidity_is_verified(
-                symbol,
-                decision_time_ms,
-                planned_notional=plan.final_notional,
-                direction=direction,
-            ):
-                self._log_decision(symbol, candles[-1].time_ms, direction, score, "REJECTED", "Liquiditaet oder ausfuehrungsspezifische Tiefe nicht verifiziert")
-                return None
-
-            # Bucht exakt den freigegebenen Plan ohne zweiten Sizing- oder Preisshift:
-            pos = self.engine.execute_plan(
-                plan=plan,
-                timeframe="1H",
-                score=score,
-                current_time_ms=candles[-1].time_ms,
-            )
+            executed_any = None
+            for acc_id, eng in self.engines.items():
+                if len(eng.open_positions) >= self.max_open_positions:
+                    continue
+                risk_budget = Decimal(str(eng.equity)) * Decimal(str(eng.config.risk_per_trade_pct)) / Decimal("100")
+                plan = eng.create_execution_plan(
+                    symbol=symbol,
+                    direction=direction,
+                    reference_price=current_price,
+                    sl_price=sl_price,
+                    tp1_price=tp1_price,
+                    tp2_price=tp2_price,
+                    spec=spec,
+                    leverage=leverage,
+                    risk_budget=risk_budget,
+                )
+                if not plan.levels_valid or plan.contracts <= 0:
+                    continue
+                if not self._liquidity_is_verified(symbol, decision_time_ms, planned_notional=plan.final_notional, direction=direction):
+                    continue
+                pos = eng.execute_plan(plan=plan, timeframe="1H", score=score, current_time_ms=candles[-1].time_ms)
+                if pos is not None:
+                    executed_any = pos
+            pos = executed_any
             if pos is not None:
                 dir_str = "LONG" if direction == 1 else "SHORT"
                 logger.info(

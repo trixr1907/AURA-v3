@@ -207,11 +207,14 @@ def get_status(sm: RunnerStateMachine = Depends(get_state_machine), pe: PaperTra
 
 @router.get("/state")
 def get_state(
+    account: str = Query(default="master"),
     sm: RunnerStateMachine = Depends(get_state_machine),
     pe: PaperTradingEngine = Depends(get_paper_engine),
     db: sqlite3.Connection = Depends(get_db),
     _token: str = Depends(verify_auth_token),
 ):
+    acc = account if account in ("master", "buddy") else "master"
+    pe = PaperTradingEngine(conn=db, account_id=acc)
     # 1. Lade aktive Config-Revision
     cur = db.cursor()
     cur.execute("SELECT payload, rev, applied_at_ms FROM config_revisions ORDER BY rev DESC LIMIT 1")

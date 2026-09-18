@@ -100,10 +100,12 @@ class PaperTradingEngine:
         self,
         config: EngineConfig | None = None,
         conn: sqlite3.Connection | None = None,
+        account_id: str = "master",
     ):
         self._lock = threading.RLock()
         self.config = config or EngineConfig()
         self.conn = conn
+        self.account_id = account_id
         self.equity: float = self.config.starting_equity
         self.starting_equity: float = self.config.starting_equity
         self.open_positions: dict[str, PaperPosition] = {}
@@ -121,10 +123,15 @@ class PaperTradingEngine:
             self.closed_positions.clear()
 
             # 1. Offene Positionen laden
+            cols = [r['name'] for r in cur.execute("PRAGMA table_info(trades)").fetchall()]
+            has_acc = 'account_id' in cols
+            acc_filter = " AND account_id = ?" if has_acc else ""
+            params = (self.account_id,) if has_acc else ()
             cur.execute(
                 "SELECT id, symbol, dir, entry_price, current_sl, initial_sl, "
                 "tp1, tp2, notional, margin, leverage, opened_at_ms, timeframe, remaining_qty, entry_fee, "
-                "status, tp1_hit, realized_pnl, fees FROM trades WHERE status = 'open'"
+                "status, tp1_hit, realized_pnl, fees FROM trades WHERE status = 'open'" + acc_filter,
+                params
             )
             entry_fees_paid = 0.0
             realized_from_open = 0.0
@@ -174,7 +181,8 @@ class PaperTradingEngine:
                 "SELECT id, symbol, dir, entry_price, current_sl, initial_sl, "
                 "tp1, tp2, notional, margin, leverage, opened_at_ms, closed_at_ms, exit_price, exit_reason, "
                 "timeframe, entry_fee, status, tp1_hit, realized_pnl, fees "
-                "FROM trades WHERE status = 'closed' ORDER BY closed_at_ms ASC"
+                "FROM trades WHERE status = 'closed'" + acc_filter + " ORDER BY closed_at_ms ASC",
+                params
             )
             total_realized = realized_from_open
             for row in cur.fetchall():
@@ -720,14 +728,18 @@ class PaperTradingEngine:
             return
         stored_notional = pos.initial_qty * pos.entry_price
         with self.conn:
-            self.conn.execute(
-                """
+            cols = [r['name'] for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()]
+            has_acc = 'account_id' in cols
+            acc_col = ", account_id" if has_acc else ""
+            acc_val = ", ?" if has_acc else ""
+            acc_update = ", account_id = excluded.account_id" if has_acc else ""
+            sql = f"""
                 INSERT INTO trades (
                     id, source, symbol, dir, status, entry_price, current_sl, initial_sl,
                     tp1, tp2, tp1_hit, notional, margin, leverage, opened_at_ms,
                     closed_at_ms, exit_price, exit_reason, realized_pnl, fees,
-                    engine_version, record_schema, entry_fee, timeframe, remaining_qty
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    engine_version, record_schema, entry_fee, timeframe, remaining_qty{acc_col}
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{acc_val})
                 ON CONFLICT(id) DO UPDATE SET
                     status = excluded.status,
                     current_sl = excluded.current_sl,
@@ -737,8 +749,10 @@ class PaperTradingEngine:
                     exit_reason = excluded.exit_reason,
                     realized_pnl = excluded.realized_pnl,
                     fees = excluded.fees,
-                    remaining_qty = excluded.remaining_qty
-                """,
+                    remaining_qty = excluded.remaining_qty{acc_update}
+            """
+            self.conn.execute(
+                sql,
                 (
                     pos.trade_id,
                     "server",
@@ -765,5 +779,5 @@ class PaperTradingEngine:
                     str(pos.initial_qty * pos.entry_price * self.config.taker_fee),
                     pos.timeframe,
                     str(pos.qty),
-                ),
+                ) + ((self.account_id,) if has_acc else ()),
             )
