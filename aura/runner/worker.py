@@ -227,7 +227,16 @@ class AuraWorkerService:
             if max_cycles is not None and cycle >= max_cycles:
                 break
 
-            time.sleep(self.poll_interval)
+            # Responsives Warten: pruefe jede Sekunde auf Control-Plane-Befehle
+            sleep_end = time.time() + self.poll_interval
+            while self._running and time.time() < sleep_end:
+                try:
+                    has_cmd = self.conn.execute("SELECT 1 FROM commands WHERE status = 'pending' LIMIT 1").fetchone()
+                    if has_cmd:
+                        break
+                except Exception:
+                    pass
+                time.sleep(1.0)
 
         logger.info("AURA v3 Worker beendet.")
 

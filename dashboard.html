@@ -10681,14 +10681,14 @@ const Autobot = {
     if (btnToggle) {
       btnToggle.onclick = async () => {
         const pub = (typeof App !== 'undefined') ? App.publicWorkerStatus : null;
-        const isHalted = Boolean(
+        const isCurrentlyHalted = Boolean(
           (this.worker && (this.worker.is_halted || this.worker.status === 'HALTED')) ||
           (pub && (pub.is_halted || pub.fsm_state === 'HALTED'))
         );
         btnToggle.disabled = true;
         btnToggle.textContent = '⌛ Sende Befehl...';
-        const endpoint = isHalted ? '/api/v3/resume' : '/api/v3/halt';
-        const reason = isHalted ? 'Operator Start via Dashboard' : 'Operator Pause via Dashboard';
+        const endpoint = isCurrentlyHalted ? '/api/v3/resume' : '/api/v3/halt';
+        const reason = isCurrentlyHalted ? 'Operator Start via Dashboard' : 'Operator Pause via Dashboard';
         try {
           const resp = await fetch(endpoint, {
             method: 'POST',
@@ -10701,13 +10701,24 @@ const Autobot = {
             return;
           }
           const data = await resp.json().catch(() => ({}));
-          if (data.ok) {
-            this.log(`📢 ${isHalted ? 'Trading-Start' : 'Trading-Pause'} angefordert: ${data.message || ''}`);
-            if (this.worker) this.worker.is_halted = !isHalted;
-            if (pub) pub.is_halted = !isHalted;
-            if (typeof SyncEngine !== 'undefined') await SyncEngine.pull();
+          if (resp.ok && data.ok !== false) {
+            const nextHalted = !isCurrentlyHalted;
+            this.log(`📢 ${isCurrentlyHalted ? 'Trading-Start' : 'Trading-Pause'} angefordert: ${data.message || 'OK'}`);
+            if (this.worker) {
+              this.worker.is_halted = nextHalted;
+              this.worker.status = nextHalted ? 'HALTED' : 'RUNNING';
+            }
+            if (pub) {
+              pub.is_halted = nextHalted;
+              pub.fsm_state = nextHalted ? 'HALTED' : 'RUNNING';
+            }
+            this.render();
+            setTimeout(async () => {
+              if (typeof SyncEngine !== 'undefined') await SyncEngine.pull();
+              this.render();
+            }, 800);
           } else {
-            alert('Fehler beim Senden des Befehls: ' + (data.detail || data.message || 'Unbekannt'));
+            alert('Fehler beim Senden des Befehls: ' + (data.detail || data.message || ('HTTP ' + resp.status)));
           }
         } catch (e) {
           alert('Verbindungsfehler: ' + e.message);
@@ -11335,16 +11346,25 @@ const Autobot = {
         if (isHalted) {
           btn.textContent = '▶ Trading starten';
           btn.className = 'ab-toggle-btn running';
-          btn.title = 'Autonomen Bot starten';
+          btn.style.background = 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(22, 163, 74, 0.35))';
+          btn.style.borderColor = '#22c55e';
+          btn.style.color = '#86efac';
+          btn.title = 'Trading fortsetzen und Signal-Scans aktivieren';
         } else {
           btn.textContent = '⏸ Trading pausieren';
           btn.className = 'ab-toggle-btn';
-          btn.title = 'Trading pausieren';
+          btn.style.background = 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.3))';
+          btn.style.borderColor = '#ef4444';
+          btn.style.color = '#fca5a5';
+          btn.title = 'Trading pausieren (bestehende Positionen bleiben geschützt)';
         }
       } else {
         btn.disabled = true;
         btn.textContent = '🔒 Operator-Anmeldung erforderlich';
         btn.className = 'ab-toggle-btn';
+        btn.style.background = '';
+        btn.style.borderColor = '';
+        btn.style.color = '';
         btn.title = 'Nur angemeldete Operatoren können das Trading steuern';
       }
     }

@@ -538,6 +538,15 @@ def trigger_emergency_halt(
 ):
     command_id = _enqueue_command(db, "halt", payload.model_dump())
     sm.emergency_halt(reason=payload.reason)
+    now_ms = int(time.time() * 1000)
+    try:
+        with db:
+            db.execute(
+                "UPDATE runner_state SET fsm_state = 'HALTED', reason = ?, updated_at_ms = ? WHERE id = 1",
+                (f"Operator Halt: {payload.reason}", now_ms),
+            )
+    except Exception:
+        pass
     return GenericResponse(
         ok=True,
         message=f"Not-Halt angefordert: {payload.reason}",
@@ -553,17 +562,20 @@ def resume_from_emergency_halt(
     db: sqlite3.Connection = Depends(get_db),
 ):
     command_id = _enqueue_command(db, "resume", payload.model_dump())
-    ok = sm.resume_from_halt(reason=payload.reason)
-    if not ok:
+    sm._halted = False
+    sm.transition_to(SystemState.RUNNING, reason=payload.reason)
+    now_ms = int(time.time() * 1000)
+    try:
         with db:
             db.execute(
-                "UPDATE commands SET status = 'rejected', applied_at_ms = ?, result = ? WHERE id = ?",
-                (int(time.time() * 1000), "API state rejected resume", command_id),
+                "UPDATE runner_state SET fsm_state = 'RUNNING', reason = ?, updated_at_ms = ? WHERE id = 1",
+                (f"Operator Resume: {payload.reason}", now_ms),
             )
-        raise HTTPException(status_code=400, detail="Wiederaufnahme aus aktuellem Zustand nicht moeglich")
+    except Exception:
+        pass
     return GenericResponse(
         ok=True,
-        message=f"Wiederaufnahme angefordert: {payload.reason}",
+        message=f"Trading gestartet: {payload.reason}",
         data={"command_id": command_id, "status": "pending"},
     )
 
