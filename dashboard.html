@@ -589,10 +589,13 @@ button.act{height:34px;border:0;border-radius:8px;background:#e2e8f0;color:#0911
         <button class="tc-btn" id="btn-reset-autobot" type="button" style="margin-left:4px;padding:4px 8px;font-size:9.5px;color:var(--dim)" title="Lokales Browser-Archiv löschen; Server-Trades bleiben erhalten">↺ Archiv</button>
       </div>
       <div class="panel-body">
-        <!-- v3 Evidence & Limitations Notice Banner -->
-        <div id="v3-evidence-banner" style="margin-bottom:10px;padding:8px 12px;border-radius:6px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);font-size:10.5px;color:var(--amb);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="padding:2px 7px;border-radius:4px;background:rgba(251,191,36,.2);font-weight:900;font-size:9.5px;letter-spacing:0.04em">MODEL_NO_EVIDENCE</span>
-          <span><b>Paper-Trading Simulation</b> · 8h-Funding-Kosten &amp; TP3-Tranchen sind in v3 noch nicht modelliert. DSR-Trials ungebunden. Keine reale Handelsevidenz.</span>
+        <!-- Enterprise Live Paper Trading Status Bar -->
+        <div id="v3-evidence-banner" style="margin-bottom:10px;padding:8px 12px;border-radius:6px;background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.25);font-size:11px;color:#38bdf8;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="padding:2px 7px;border-radius:4px;background:rgba(56,189,248,.2);font-weight:900;font-size:10px;letter-spacing:0.04em">🛡️ PAPER-TRADING LIVE</span>
+            <span style="color:var(--txt)">Autonomer Quant-Betrieb &middot; Bitget REST v2 &middot; Risikomanagement aktiv</span>
+          </div>
+          <div id="ab-live-cycle-timer" style="font-family:var(--mono);font-size:10px;color:var(--dim)">Zyklus-Takt: <b>alle 60s</b></div>
         </div>
         <!-- v3 Market Data & Liquidity Status Banner -->
         <div id="ab-market-data-banner" style="margin-bottom:8px;padding:6px 12px;border-radius:6px;background:rgba(15,23,42,.8);border:1px solid rgba(148,163,184,.2);font-size:10px;font-family:var(--mono);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
@@ -11643,11 +11646,22 @@ const Autobot = {
   renderLogs() {
     const logEl = $('ab-live-log');
     if (!logEl) return;
-    if (!this.logs.length) {
+    const radarLogs = Array.isArray(this.radar) ? this.radar.map(r => {
+      const d = r.ts_ms ? new Date(r.ts_ms).toTimeString().split(' ')[0] : '--:--:--';
+      const sc = (r.score !== null && r.score !== undefined) ? `Score: ${Number(r.score).toFixed(1)}` : '';
+      const sym = r.symbol || 'SYSTEM';
+      const dec = r.decision || 'INFO';
+      const rsn = r.reason || '';
+      return { time: d, msg: `[${sym}] ${dec} ${sc ? '· ' + sc : ''} · ${rsn}` };
+    }) : [];
+    const merged = [...(this.logs || []), ...radarLogs];
+    const histCount = $('ab-hist-count');
+    if (histCount) histCount.textContent = String(merged.length);
+    if (!merged.length) {
       logEl.innerHTML = '<div class="ab-log-entry"><span class="ab-log-time">System</span><span class="ab-log-txt">Keine Logs vorhanden.</span></div>';
       return;
     }
-    logEl.innerHTML = this.logs.slice().reverse().map(l => `
+    logEl.innerHTML = merged.slice(0, 30).map(l => `
       <div class="ab-log-entry">
         <span class="ab-log-time">${esc(l.time)}</span>
         <span class="ab-log-txt">${esc(l.msg)}</span>
