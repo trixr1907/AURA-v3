@@ -10680,11 +10680,15 @@ const Autobot = {
     const btnToggle = $('btn-toggle-autobot');
     if (btnToggle) {
       btnToggle.onclick = async () => {
+        const pub = (typeof App !== 'undefined') ? App.publicWorkerStatus : null;
+        const isHalted = Boolean(
+          (this.worker && (this.worker.is_halted || this.worker.status === 'HALTED')) ||
+          (pub && (pub.is_halted || pub.fsm_state === 'HALTED'))
+        );
         btnToggle.disabled = true;
         btnToggle.textContent = '⌛ Sende Befehl...';
-        const isHalted = this.worker && this.worker.is_halted;
         const endpoint = isHalted ? '/api/v3/resume' : '/api/v3/halt';
-        const reason = isHalted ? 'Operator Resume via Dashboard' : 'Operator Not-Halt via Dashboard';
+        const reason = isHalted ? 'Operator Start via Dashboard' : 'Operator Pause via Dashboard';
         try {
           const resp = await fetch(endpoint, {
             method: 'POST',
@@ -10699,6 +10703,8 @@ const Autobot = {
           const data = await resp.json().catch(() => ({}));
           if (data.ok) {
             this.log(`📢 ${isHalted ? 'Trading-Start' : 'Trading-Pause'} angefordert: ${data.message || ''}`);
+            if (this.worker) this.worker.is_halted = !isHalted;
+            if (pub) pub.is_halted = !isHalted;
             if (typeof SyncEngine !== 'undefined') await SyncEngine.pull();
           } else {
             alert('Fehler beim Senden des Befehls: ' + (data.detail || data.message || 'Unbekannt'));
@@ -11278,99 +11284,68 @@ const Autobot = {
   render() {
     const isAuth = typeof AuraApp !== 'undefined' && AuraApp.isAuthenticated;
 
-    // 1. Status Badge & Toggle Button
+    // 1. Status Badge & Toggle Button (Unified, foolproof toggle logic)
     const badge = $('ab-status-badge');
     const btn = $('btn-toggle-autobot');
+    const pub = (typeof App !== 'undefined') ? App.publicWorkerStatus : null;
+    const isHalted = Boolean(
+      (this.worker && (this.worker.is_halted || this.worker.status === 'HALTED')) ||
+      (pub && (pub.is_halted || pub.fsm_state === 'HALTED'))
+    );
+    const isRunning = Boolean(
+      !isHalted && (
+        (this.worker && this.worker.status === 'RUNNING') ||
+        (pub && pub.fsm_state === 'RUNNING')
+      )
+    );
+    const isStale = Boolean((this.worker && this.worker.is_stale) || (pub && pub.stale));
+
     if (badge) {
-      if (this.worker && this.worker.is_halted) {
+      if (isHalted) {
         badge.textContent = '⏸ PAUSIERT (Keine neuen Trades)';
         badge.className = 'autobot-status-badge';
         badge.style.background = 'rgba(239,68,68,.2)';
         badge.style.borderColor = '#ef4444';
         badge.style.color = '#ef4444';
-        if (btn) {
-          if (isAuth) {
-            btn.textContent = '▶ Trading starten';
-            btn.className = 'ab-toggle-btn running';
-            btn.disabled = false;
-            btn.title = 'Autonomen Bot starten';
-          } else {
-            btn.textContent = '🔒 Operator-Anmeldung erforderlich';
-            btn.className = 'ab-toggle-btn';
-            btn.disabled = true;
-            btn.title = 'Nur angemeldete Operatoren können Trading pausieren oder starten';
-          }
-        }
-      } else if (this.worker && this.worker.is_stale) {
-        badge.textContent = `⚠️ WORKER STALE (${this.worker.data_age_seconds || '?'}s)`;
+      } else if (isStale) {
+        badge.textContent = `⚠️ WORKER STALE (${(this.worker && this.worker.data_age_seconds) || (pub && pub.data_age_seconds) || '?'}s)`;
         badge.className = 'autobot-status-badge';
         badge.style.background = 'rgba(245,158,11,.2)';
         badge.style.borderColor = '#f59e0b';
         badge.style.color = '#f59e0b';
-        if (btn) {
-          if (isAuth) {
-            btn.textContent = '⏸ Trading pausieren';
-            btn.className = 'ab-toggle-btn';
-            btn.disabled = false;
-          } else {
-            btn.textContent = '🔒 Operator-Anmeldung erforderlich';
-            btn.className = 'ab-toggle-btn';
-            btn.disabled = true;
-          }
-        }
-      } else if (this.worker && this.worker.status === 'RUNNING') {
-        badge.textContent = `● TRADING AKTIV (${this.worker.data_age_seconds || 0}s)`;
+      } else if (isRunning) {
+        const age = (this.worker && this.worker.data_age_seconds) || (pub && pub.data_age_seconds) || 0;
+        badge.textContent = `● TRADING AKTIV (${age}s)`;
         badge.className = 'autobot-status-badge active';
         badge.style.background = 'rgba(45,212,191,.2)';
         badge.style.borderColor = '#2dd4bf';
         badge.style.color = '#2dd4bf';
-        if (btn) {
-          if (isAuth) {
-            btn.textContent = '⏸ Trading pausieren';
-            btn.className = 'ab-toggle-btn';
-            btn.disabled = false;
-          } else {
-            btn.textContent = '🔒 Operator-Anmeldung erforderlich';
-            btn.className = 'ab-toggle-btn';
-            btn.disabled = true;
-          }
+      } else {
+        badge.textContent = '● SYSTEM BEREIT';
+        badge.className = 'autobot-status-badge';
+        badge.style.background = 'rgba(100,116,139,.1)';
+        badge.style.borderColor = '#64748b';
+        badge.style.color = '#94a3b8';
+      }
+    }
+
+    if (btn) {
+      if (isAuth) {
+        btn.disabled = false;
+        if (isHalted) {
+          btn.textContent = '▶ Trading starten';
+          btn.className = 'ab-toggle-btn running';
+          btn.title = 'Autonomen Bot starten';
+        } else {
+          btn.textContent = '⏸ Trading pausieren';
+          btn.className = 'ab-toggle-btn';
+          btn.title = 'Trading pausieren';
         }
       } else {
-        // Kein spezifischer Worker-Zustand aus /api/v3/state (anonym oder unbekannt).
-        // Zeige Zustand aus /status/worker (öffentlich, DB-autoritativ) oder ehrlich "unbekannt".
-        const pub = (typeof App !== 'undefined') ? App.publicWorkerStatus : null;
-        if (pub && pub.worker_known === true && !pub.stale) {
-          if (pub.is_halted) {
-            if (badge) {
-              badge.textContent = '⏸ PAUSIERT (Keine neuen Trades)';
-              badge.className = 'autobot-status-badge';
-              if (badge.style) { badge.style.background = 'rgba(239,68,68,.2)'; badge.style.borderColor = '#ef4444'; badge.style.color = '#ef4444'; }
-            }
-          } else {
-            if (badge) {
-              badge.textContent = `● ${pub.fsm_state}`;
-              badge.className = pub.fsm_state === 'RUNNING' ? 'autobot-status-badge active' : 'autobot-status-badge';
-              if (badge.style) { badge.style.background = 'rgba(45,212,191,.15)'; badge.style.borderColor = '#2dd4bf'; badge.style.color = '#2dd4bf'; }
-            }
-          }
-        } else if (pub && pub.stale) {
-          if (badge) {
-            badge.textContent = '⚠️ WORKER STALE — Anmeldung für Details';
-            badge.className = 'autobot-status-badge';
-            if (badge.style) { badge.style.background = 'rgba(245,158,11,.15)'; badge.style.borderColor = '#f59e0b'; badge.style.color = '#f59e0b'; }
-          }
-        } else {
-          // Keine verifizierten Daten — ehrlich "nicht abrufbar" anzeigen
-          if (badge) {
-            badge.textContent = 'Anmeldung erforderlich / Worker-Zustand nicht abrufbar';
-            badge.className = 'autobot-status-badge';
-            if (badge.style) { badge.style.background = 'rgba(100,116,139,.1)'; badge.style.borderColor = '#64748b'; badge.style.color = '#94a3b8'; }
-          }
-        }
-        if (btn) {
-          btn.textContent = isAuth ? '⏸ Trading pausieren' : '🔒 Operator-Anmeldung erforderlich';
-          btn.disabled = !isAuth;
-        }
+        btn.disabled = true;
+        btn.textContent = '🔒 Operator-Anmeldung erforderlich';
+        btn.className = 'ab-toggle-btn';
+        btn.title = 'Nur angemeldete Operatoren können das Trading steuern';
       }
     }
 
