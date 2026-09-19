@@ -8731,10 +8731,25 @@ function bindAutobotContainerEvents(container) {
         e.stopPropagation();
         const tradeId = closeBtn.dataset.closeAbId || closeBtn.dataset.closeAbIdx;
         const t = findAutobotTrade(tradeId);
-        if (t && typeof Autobot !== 'undefined' && typeof Autobot.closeTrade === 'function') {
+        if (t) {
           const px = t.markPrice || tradePrices[t.coin] || t.entry;
           const idx = Autobot.trades.findIndex(x => x && (x.id === t.id || x === t));
-          Autobot.closeTrade(idx >= 0 ? idx : (+closeBtn.dataset.closeAbIdx || 0), px, 'MANUAL_INTERVENTION');
+          const serverId = t.id || t.tradeId;
+          if (serverId && String(serverId).startsWith('trade_')) {
+            fetch('/api/v3/trades/close', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ trade_id: serverId, reason: 'MANUAL_UI_CLOSE' })
+            }).then(r => r.json()).then(res => {
+              if (res?.data?.command_id && typeof pollCommandResult === 'function') {
+                pollCommandResult(res.data.command_id);
+              }
+            }).catch(() => {});
+          }
+          if (typeof Autobot !== 'undefined' && typeof Autobot.closeTrade === 'function') {
+            Autobot.closeTrade(idx >= 0 ? idx : (+closeBtn.dataset.closeAbIdx || 0), px, 'MANUAL_INTERVENTION');
+          }
         }
         return;
       }
@@ -10775,9 +10790,13 @@ const Autobot = {
     const btnReset = $('btn-reset-autobot');
     if (btnReset) {
       btnReset.onclick = () => {
-        if (confirm('Lokales Browser-Archiv wirklich löschen? Server-Trades und Server-Historie bleiben unverändert.')) {
-          this.trades = this.trades.filter(t => t && t.source === 'server');
-          this.history = this.history.filter(t => t && t.source === 'server');
+        if (confirm("Möchten Sie das Konto wirklich komplett auf dem Server auf 10.000 USDT zurücksetzen?\n\nAlle offenen und geschlossenen Trades werden gelöscht.")) {
+          if (typeof executeAccountReset === "function") {
+            executeAccountReset();
+            return;
+          }
+          this.trades = [];
+          this.history = this.history.filter(t => t && t.source === "server");
           this.logs = [];
           this.log('↺ Lokales Browser-Archiv gelöscht; Server-Daten bleiben Quelle der Anzeige.');
           this.save();
